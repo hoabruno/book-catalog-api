@@ -38,7 +38,8 @@ return [
 
         'array' => [
             'driver' => 'array',
-            'serialize' => false,
+            // Tests serialize, like Redis does, so cached objects are checked.
+            'serialize' => (bool) env('CACHE_ARRAY_SERIALIZE', false),
         ],
 
         'database' => [
@@ -133,6 +134,15 @@ return [
     |
     */
 
-    'serializable_classes' => false,
+    // Only what the catalog caches (CachedBookRepository), nothing else.
+    'serializable_classes' => [
+        App\Models\Author::class,
+        App\Models\Book::class,
+        App\Models\BookFile::class,
+        Illuminate\Database\Eloquent\Collection::class,
+        Illuminate\Support\Collection::class,
+        Illuminate\Pagination\CursorPaginator::class,
+        Illuminate\Pagination\Cursor::class,
+    ],
 
 ];
