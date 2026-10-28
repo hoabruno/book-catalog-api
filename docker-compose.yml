@@ -1,0 +1,200 @@
+# Production stack, behind the shared Traefik of the host (external network
+# traefik-public, Let's Encrypt resolver "le", middleware https-redirect).
+#
+#   web        nginx: static files, PHP requests to app        (public, via Traefik)
+#   app        PHP-FPM, runs the migrations on start
+#   worker     queue worker (file replication)
+#   scheduler  scheduled tasks (expired token pruning)
+#   mysql      catalog database
+#   redis      cache, sessions, queue
+#   garage     S3-compatible object storage (primary file backend)
+#   webdav     rclone WebDAV server (replica file backend)
+#
+# Only "web" is reachable from outside; every other service lives on the
+# internal "backend" network and publishes no port. Secrets come from ./.env
+# (see .env.example). Compose file format 2.4 for docker-compose v1.
+version: "2.4"
+
+x-app-env: &app-env
+  APP_ENV: production
+  APP_DEBUG: "false"
+  APP_KEY: ${APP_KEY:?set APP_KEY in .env}
+  APP_URL: https://${APP_HOST:?set APP_HOST in .env}
+  APP_LOCALE: fr
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: info
+  DB_CONNECTION: mysql
+  DB_HOST: mysql
+  DB_DATABASE: catalog
+  DB_USERNAME: catalog
+  DB_PASSWORD: ${DB_PASSWORD}
+  REDIS_HOST: redis
+  REDIS_PASSWORD: ${REDIS_PASSWORD}
+  CACHE_STORE: redis
+  SESSION_DRIVER: redis
+  SESSION_SECURE_COOKIE: "true"
+  QUEUE_CONNECTION: redis
+  BOOKS_S3_ENDPOINT: http://garage:3900
+  BOOKS_S3_KEY: ${BOOKS_S3_KEY:?set BOOKS_S3_KEY in .env}
+  BOOKS_S3_SECRET: ${BOOKS_S3_SECRET:?set BOOKS_S3_SECRET in .env}
+  BOOKS_WEBDAV_URL: http://webdav:8080/
+  BOOKS_WEBDAV_USERNAME: catalog
+  BOOKS_WEBDAV_PASSWORD: ${BOOKS_WEBDAV_PASSWORD}
+
+# Shared by app, worker and scheduler: same image, different command. Only
+# the secrets the application needs are passed, not the whole .env.
+x-app: &app
+  build:
+    context: .
+    target: app
+  image: book-catalog-app
+  restart: unless-stopped
+  environment: *app-env
+  depends_on:
+    mysql:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  networks:
+    - backend
+
+services:
+  app:
+    <<: *app
+    container_name: book-catalog-app
+    environment:
+      <<: *app-env
+      RUN_MIGRATIONS: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9000"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    <<: *app
+    container_name: book-catalog-worker
+    command: ["php", "artisan", "queue:work", "--tries=5", "--max-time=3600", "--sleep=2"]
+
+  scheduler:
+    <<: *app
+    container_name: book-catalog-scheduler
+    command: ["php", "artisan", "schedule:work"]
+
+  web:
+    build:
+      context: .
+      target: web
+    image: book-catalog-web
+    container_name: book-catalog-web
+    restart: unless-stopped
+    depends_on:
+      - app
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+      - traefik-public
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/up > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - traefik.http.routers.book-catalog-http.rule=Host(`${APP_HOST}`)
+      - traefik.http.routers.book-catalog-http.entrypoints=http
+      - traefik.http.routers.book-catalog-http.middlewares=https-redirect
+      - traefik.http.routers.book-catalog.rule=Host(`${APP_HOST}`)
+      - traefik.http.routers.book-catalog.entrypoints=https
+      - traefik.http.routers.book-catalog.tls=true
+      - traefik.http.routers.book-catalog.tls.certresolver=le
+      - traefik.http.routers.book-catalog.service=book-catalog
+      - traefik.http.services.book-catalog.loadbalancer.server.port=80
+
+  mysql:
+    image: mysql:8.4
+    container_name: book-catalog-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: catalog
+      MYSQL_USER: catalog
+      MYSQL_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+    command: ["--innodb-buffer-pool-size=256M", "--max-connections=60"]
+    volumes:
+      - mysql-data:/var/lib/mysql
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -ucatalog -p\"$$MYSQL_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: book-catalog-redis
+    restart: unless-stopped
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\" --maxmemory 128mb --maxmemory-policy volatile-lru --appendonly yes"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    volumes:
+      - redis-data:/data
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  garage:
+    image: dxflrs/garage:v2.1.0
+    container_name: book-catalog-garage
+    restart: unless-stopped
+    environment:
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET:?set GARAGE_RPC_SECRET in .env}
+      GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN:?set GARAGE_ADMIN_TOKEN in .env}
+    volumes:
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+
+  webdav:
+    image: rclone/rclone:1.71
+    container_name: book-catalog-webdav
+    restart: unless-stopped
+    command: ["serve", "webdav", "/data", "--addr", ":8080", "--user", "catalog", "--pass", "${BOOKS_WEBDAV_PASSWORD:?set BOOKS_WEBDAV_PASSWORD in .env}"]
+    volumes:
+      - webdav-data:/data
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - backend
+
+volumes:
+  mysql-data:
+  redis-data:
+  garage-meta:
+  garage-data:
+  webdav-data:
+
+networks:
+  backend:
+    internal: true
+  traefik-public:
+    external: true
