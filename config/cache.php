@@ -2,6 +2,12 @@
 
 declare(strict_types=1);
 
+use App\Models\Author;
+use App\Models\Book;
+use App\Models\BookFile;
+use Illuminate\Pagination\Cursor;
+use Illuminate\Pagination\CursorPaginator;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 return [
@@ -136,13 +142,13 @@ return [
 
     // Only what the catalog caches (CachedBookRepository), nothing else.
     'serializable_classes' => [
-        App\Models\Author::class,
-        App\Models\Book::class,
-        App\Models\BookFile::class,
+        Author::class,
+        Book::class,
+        BookFile::class,
         Illuminate\Database\Eloquent\Collection::class,
-        Illuminate\Support\Collection::class,
-        Illuminate\Pagination\CursorPaginator::class,
-        Illuminate\Pagination\Cursor::class,
+        Collection::class,
+        CursorPaginator::class,
+        Cursor::class,
     ],
 
 ];
