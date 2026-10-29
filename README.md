@@ -153,6 +153,23 @@ published port.
 `database/data/classics.csv` holds 30 public domain classics. Their ISBNs are
 **fictitious** (valid checksums in a single range), not those of real editions.
 
+## How it was built
+
+Developed with an AI coding assistant, the way I use one day to day. The scope,
+requirements, security rules (secrets generated on the server and never
+displayed, only nginx exposed, no password on a command line) and the review
+of every change are mine.
+
+Two bugs got past the test suite and were found by deploying against the real
+services; both are now covered or documented:
+
+- Laravel 13 refuses to unserialize cached objects by default, so Redis
+  returned incomplete objects. The cache config now allows exactly the classes
+  the catalog caches, and tests run with a serializing cache.
+- The WebDAV client negotiated authentication, which makes curl resend the
+  request body; a stream read from S3 cannot be rewound. Credentials are now
+  sent up front.
+
 ## License
 
 MIT
