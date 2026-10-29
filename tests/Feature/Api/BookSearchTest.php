@@ -7,13 +7,14 @@ namespace Tests\Feature\Api;
 use App\Enums\BookFormat;
 use App\Models\Author;
 use App\Models\Book;
-use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Foundation\Testing\DatabaseMigrations;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\TestCase;
 
 final class BookSearchTest extends TestCase
 {
-    use RefreshDatabase;
+    // InnoDB full-text indexes only see committed rows, so these tests cannot run inside a rolled back transaction.
+    use DatabaseMigrations;
 
     #[Test]
     public function it_lists_books_newest_first_with_their_author(): void
