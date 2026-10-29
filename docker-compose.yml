@@ -178,7 +178,12 @@ services:
     image: rclone/rclone:1.71
     container_name: book-catalog-webdav
     restart: unless-stopped
-    command: ["serve", "webdav", "/data", "--addr", ":8080", "--user", "catalog", "--pass", "${BOOKS_WEBDAV_PASSWORD:?set BOOKS_WEBDAV_PASSWORD in .env}"]
+    command: ["serve", "webdav", "/data", "--addr", ":8080"]
+    # Credentials as environment variables (rclone reads RCLONE_<FLAG>),
+    # so the password never shows up in the process list.
+    environment:
+      RCLONE_USER: catalog
+      RCLONE_PASS: ${BOOKS_WEBDAV_PASSWORD:?set BOOKS_WEBDAV_PASSWORD in .env}
     volumes:
       - webdav-data:/data
     security_opt:
