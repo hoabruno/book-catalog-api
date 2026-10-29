@@ -67,6 +67,9 @@ final class CatalogServiceProvider extends ServiceProvider
                     'baseUri' => $config['base_uri'],
                     'userName' => $config['username'] ?? null,
                     'password' => $config['password'] ?? null,
+                    // Send credentials up front: negotiating Basic or Digest
+                    // makes curl resend the body, which a stream cannot do.
+                    'authType' => Client::AUTH_BASIC,
                 ]),
                 $config['prefix'] ?? '',
             );
